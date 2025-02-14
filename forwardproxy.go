@@ -106,6 +106,11 @@ type Handler struct {
 
 	// TODO: temporary/deprecated - we should try to reuse existing authentication modules instead!
 	AuthCredentials [][]byte `json:"auth_credentials,omitempty"` // slice with base64-encoded credentials
+
+	// proxy UDP over http
+	udpProxyServer udpProxyServer
+	// Optionally configure a uri template for rfc 9298 to use.
+	URITemplate string `json:"udp_uri_template,omitempty"`
 }
 
 // CaddyModule returns the Caddy module information.
@@ -240,6 +245,13 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		}
 	}
 
+	// init masque proxy
+	var err error
+	h.udpProxyServer, err = newUDPProxyServer(h.URITemplate, h.logger)
+	if err != nil {
+		return fmt.Errorf("create udp proxy error: %w", err)
+	}
+
 	return nil
 }
 
@@ -290,6 +302,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, next caddyht
 		}
 		ctxHeader.Add("Forwarded", "for=\""+r.RemoteAddr+"\"")
 		ctx = context.WithValue(ctx, httpclient.ContextKeyHeader{}, ctxHeader)
+	}
+
+	// https://datatracker.ietf.org/doc/html/rfc9298
+	// try UDP over HTTP
+	isUDPoverHTTP, err := h.tryUDPoverHTTP(w, r)
+	if isUDPoverHTTP {
+		if err != nil {
+			return fmt.Errorf("handle UDP over HTTP error: %w", err)
+		}
+		return nil
 	}
 
 	if r.Method == http.MethodConnect {
